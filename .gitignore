@@ -1,0 +1,33 @@
+# Environment variables - contains sensitive credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Browser data
+browser_data/
+
+# Runtime artifacts
+qrcode.png
+
+# Output
+output/
+test_output/
+
+# Large static assets (font file)
+MSYH.TTC
