@@ -164,45 +164,66 @@ async def main():
             logger.warning("没有爬取到数据，退出")
             return
 
-        # 2. 保存数据
-        logger.info("保存数据...")
+        # 2. 保存数据 & 3. 生成报告
+        data_paths = []
+        report_paths = []
 
-        # 关键词模式下用关键词命名输出文件
         if settings.crawler_type == CrawlerType.SEARCH and settings.keywords:
+            # 关键词模式：所有视频保存在同一个关键词目录下
             kw = settings.keywords.split(",")[0].strip()
             output_dir = f"{settings.storage_output_dir}/{kw}_results"
             filename = f"{kw}.json"
             report_filename = f"{kw}.md"
             wordcloud_filename = f"{kw}.png"
+
+            logger.info("保存数据...")
+            data_path = await save_data(videos, output_dir=output_dir, filename=filename)
+            if data_path:
+                data_paths.append(data_path)
+                logger.info(f"数据已保存: {data_path}")
+
+            logger.info("生成分析报告...")
+            report_path = generate_analysis_report(
+                videos, output_dir=output_dir,
+                report_filename=report_filename,
+                wordcloud_filename=wordcloud_filename
+            )
+            if report_path:
+                report_paths.append(report_path)
+                logger.info(f"报告已生成: {report_path}")
         else:
-            output_dir = settings.storage_output_dir
-            filename = None
-            report_filename = "report.md"
-            wordcloud_filename = "title_wordcloud.png"
+            # 视频号模式：每个 BV 号独立一个目录
+            for video in videos:
+                bvid = video.bvid
+                output_dir = f"{settings.storage_output_dir}/{bvid}_results"
+                filename = f"{bvid}.json"
+                report_filename = f"{bvid}.md"
+                wordcloud_filename = f"{bvid}.png"
 
-        data_path = await save_data(videos, output_dir=output_dir, filename=filename)
-        if data_path:
-            logger.info(f"数据已保存: {data_path}")
+                logger.info(f"保存 {bvid} 数据...")
+                data_path = await save_data([video], output_dir=output_dir, filename=filename)
+                if data_path:
+                    data_paths.append(data_path)
+                    logger.info(f"数据已保存: {data_path}")
 
-        # 3. 生成分析报告
-        logger.info("生成分析报告...")
-        report_path = generate_analysis_report(
-            videos,
-            output_dir=output_dir,
-            report_filename=report_filename,
-            wordcloud_filename=wordcloud_filename
-        )
-        if report_path:
-            logger.info(f"报告已生成: {report_path}")
+                logger.info(f"生成 {bvid} 分析报告...")
+                report_path = generate_analysis_report(
+                    [video], output_dir=output_dir,
+                    report_filename=report_filename,
+                    wordcloud_filename=wordcloud_filename
+                )
+                if report_path:
+                    report_paths.append(report_path)
+                    logger.info(f"报告已生成: {report_path}")
 
         # 4. 打印结果摘要
         logger.info("=" * 50)
         logger.info("任务完成！")
         logger.info(f"爬取视频: {len(videos)} 个")
-        if data_path:
-            logger.info(f"数据文件: {data_path}")
-        if report_path:
-            logger.info(f"分析报告: {report_path}")
+        for dp in data_paths:
+            logger.info(f"数据文件: {dp}")
+        for rp in report_paths:
+            logger.info(f"分析报告: {rp}")
         logger.info("=" * 50)
 
         # 打印部分结果预览
