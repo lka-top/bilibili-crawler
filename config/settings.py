@@ -27,7 +27,8 @@ class StorageType(str, Enum):
     """存储类型枚举"""
     JSON = "json"
     CSV = "csv"
-
+    MYSQL = "mysql"
+    
 
 class LoginType(str, Enum):
     """登录类型枚举"""

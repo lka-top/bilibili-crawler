@@ -78,7 +78,7 @@ async def run_crawler() -> List[BilibiliVideo]:
     return await crawler.start()
 
 
-async def save_data(videos: List[BilibiliVideo], output_dir: str = None, filename: str = None) -> str:
+async def save_data(videos: List[BilibiliVideo], output_dir: str = None, filename: str = None, keyword: str = '') -> str:
     if not videos:
         logger.warning("没有数据需要保存")
         return ""
@@ -92,7 +92,7 @@ async def save_data(videos: List[BilibiliVideo], output_dir: str = None, filenam
         filename=filename
     )
 
-    success = await storage.save(data)
+    success = await storage.save(data, keyword=keyword)
 
     if success:
         return str(storage.filepath)
@@ -177,7 +177,7 @@ async def main():
             wordcloud_filename = f"{kw}.png"
 
             logger.info("保存数据...")
-            data_path = await save_data(videos, output_dir=output_dir, filename=filename)
+            data_path = await save_data(videos, output_dir=output_dir, filename=filename, keyword=kw)
             if data_path:
                 data_paths.append(data_path)
                 logger.info(f"数据已保存: {data_path}")

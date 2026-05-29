@@ -191,20 +191,24 @@ class BilibiliCrawler:
 
         return self._results
 
-    async def _search_single_keyword(self, keyword: str):
-        """
-        搜索单个关键词
+    async def _fetch_detail(self, bvid: str, keyword: str = '', semaphore: asyncio.Semaphore = None):
+        """获取单个视频详情（并发安全）"""
+        async with semaphore:
+            await asyncio.sleep(random.uniform(0.1, 0.5))
+            detail = await self.bili_client.get_video_info(bvid=bvid)#type:ignore
+            if detail and keyword:
+                detail.source_keyword = keyword
+            return detail
 
-        Args:
-            keyword: 搜索关键词
-        """
+    async def _search_single_keyword(self, keyword: str):
+        """搜索单个关键词（页间串行，页内并发获取详情）"""
         page = 1
         page_size = bilibili_config.SEARCH_PAGE_SIZE
+        sem = asyncio.Semaphore(self.max_concurrency)
 
         while len(self._results) < self.max_video_count:
             logger.info(f"[BilibiliCrawler] 搜索 '{keyword}'，第 {page} 页")
 
-            # 搜索视频
             videos = await self.bili_client.search_video_by_keyword( # type: ignore
                 keyword=keyword,
                 page=page,
@@ -215,44 +219,32 @@ class BilibiliCrawler:
                 logger.info(f"[BilibiliCrawler] '{keyword}' 第 {page} 页无结果，停止搜索")
                 break
 
-            # 获取视频详情
-            for video in videos:
-                if len(self._results) >= self.max_video_count:
-                    break
-                # 付费视频没有 bvid，无法获取详情
-                if not video.bvid:
-                    logger.info(f"[BilibiliCrawler] 此为付费视频,无法获取: {video.title}")
-                    continue
-                logger.info(f"[BilibiliCrawler]正在获取:{video.title}...")
-                # 获取完整视频详情
+            # 过滤付费视频，截取剩余所需数量
+            need = self.max_video_count - len(self._results)
+            targets = [(v.bvid, v) for v in videos if v.bvid][:need]
 
-                video_detail = await self.bili_client.get_video_info(bvid=video.bvid)#type:ignore
-                if video_detail:
-                    video_detail.source_keyword = keyword
-                    self._results.append(video_detail)
-                    logger.info(f"[BilibiliCrawler]获取视频: {video_detail.title[:30]}...")
+            if not targets:
+                page += 1
+                continue
+
+            logger.info(f"[BilibiliCrawler] 并发获取 {len(targets)} 个视频详情...")
+            tasks = [self._fetch_detail(bvid, keyword, sem) for bvid, _ in targets]
+            details = await asyncio.gather(*tasks)
+
+            for (bvid, video), detail in zip(targets, details):
+                if detail:
+                    self._results.append(detail)
+                    logger.info(f"[BilibiliCrawler]获取视频: {detail.title[:30]}...")
                 else:
-                    # 如果获取详情失败，使用搜索结果
+                    video.source_keyword = keyword
                     self._results.append(video)
 
-                # 随机延迟
-                await self._random_delay()
-
             page += 1
-
-            # 防止无限循环
             if page > 50:
                 break
 
     async def get_specified_videos(self) -> List[BilibiliVideo]:
-        """
-        获取指定视频列表的详情
-
-        从配置中读取视频列表（BV号或URL）
-
-        Returns:
-            List[BilibiliVideo]: 视频列表
-        """
+        """获取指定视频列表的详情（全部并发）"""
         video_list = settings.specified_id_list
 
         if not video_list:
@@ -261,33 +253,26 @@ class BilibiliCrawler:
 
         logger.info(f"[BilibiliCrawler] 获取 {len(video_list)} 个指定视频")
 
+        bvids = []
         for video_id in video_list:
-            if len(self._results) >= self.max_video_count:
-                break
-
-            # 解析 BV 号
             try:
-                video_info = parse_video_info_from_url(video_id)
-                bvid = video_info.video_id
+                info = parse_video_info_from_url(video_id)
+                bvids.append(info.video_id)
             except ValueError:
                 logger.warning(f"[BilibiliCrawler] 无法解析视频 ID: {video_id}")
-                continue
 
-            # 获取视频详情
-            video = await self.bili_client.get_video_info(bvid=bvid)# type: ignore
-            if video:
-                self._results.append(video)
-                logger.info(f"[BilibiliCrawler] 获取视频: {video.title[:30]}...")
+        bvids = bvids[:self.max_video_count]
+        sem = asyncio.Semaphore(self.max_concurrency)
 
-            # 随机延迟
-            await self._random_delay()
+        tasks = [self._fetch_detail(bvid, '', sem) for bvid in bvids]
+        details = await asyncio.gather(*tasks)
+
+        for bvid, detail in zip(bvids, details):
+            if detail:
+                self._results.append(detail)
+                logger.info(f"[BilibiliCrawler] 获取视频: {detail.title[:30]}...")
 
         return self._results
-
-    async def _random_delay(self):
-        """随机延迟，避免请求过快"""
-        delay = random.uniform(self.delay_min, self.delay_max)
-        await asyncio.sleep(delay)
 
     def get_results(self) -> List[BilibiliVideo]:
         """

@@ -177,6 +177,116 @@ class CSVStorage(BaseStorage):
             return []
 
 
+class MysqlManager:
+    """MySQL 存储管理器
+
+    关键词模式：每个关键词一张表（kw_<关键词>），全量替换旧数据
+    视频号模式：固定表 t_video_detail，追加写入
+    """
+
+    _TABLE_DETAIL = 't_video_detail'
+
+    # 共用的列定义
+    _COL_DEF = (
+        'id INT AUTO_INCREMENT PRIMARY KEY, '
+        'bvid VARCHAR(20) NOT NULL, '
+        'video_id VARCHAR(30) DEFAULT "", '
+        'title VARCHAR(500) DEFAULT "", '
+        '`desc` TEXT, '
+        'cover_url VARCHAR(300) DEFAULT "", '
+        'duration INT DEFAULT 0, '
+        'create_time BIGINT DEFAULT 0, '
+        'pubdate_str VARCHAR(20) DEFAULT "", '
+        'user_id BIGINT DEFAULT 0, '
+        'nickname VARCHAR(100) DEFAULT "", '
+        'avatar VARCHAR(300) DEFAULT "", '
+        'play_count INT DEFAULT 0, '
+        'danmaku_count INT DEFAULT 0, '
+        'comment_count INT DEFAULT 0, '
+        'liked_count INT DEFAULT 0, '
+        'coin_count INT DEFAULT 0, '
+        'favorite_count INT DEFAULT 0, '
+        'share_count INT DEFAULT 0, '
+        'video_url VARCHAR(200) DEFAULT "", '
+        'tname VARCHAR(50) DEFAULT "", '
+        'crawl_time VARCHAR(20) DEFAULT ""'
+    )
+
+    # data dict keys → table columns
+    _DATA_COLS = [
+        'bvid', 'video_id', 'title', 'desc', 'cover_url', 'duration',
+        'create_time', 'pubdate_str', 'user_id', 'nickname', 'avatar',
+        'play_count', 'danmaku_count', 'comment_count', 'liked_count',
+        'coin_count', 'favorite_count', 'share_count', 'video_url',
+        'tname', 'crawl_time',
+    ]
+
+    def __init__(self):
+        from store.mysql import MySQLDatabase
+        self._db = MySQLDatabase()
+
+    @staticmethod
+    def _keyword_table(keyword: str) -> str:
+        return f'kw_{keyword}'
+
+    def _ensure_table(self, table: str):
+        """表不存在则创建"""
+        if not self._db.table_exists(table):
+            self._db.create_table(table, self._COL_DEF)
+
+    def save_keyword(self, keyword: str, data: list[dict]) -> int:
+        """关键词模式：删表重建，全量替换。返回写入行数。"""
+        table = self._keyword_table(keyword)
+        # 全量替换：先删再建
+        self._db.drop_table(table)
+        self._db.create_table(table, self._COL_DEF)
+
+        if not data:
+            return 0
+
+        rows = [{k: item.get(k, '') for k in self._DATA_COLS} for item in data]
+        count = self._db.insert_batch(table, rows)
+        logger.info(f'关键词 "{keyword}" → 表 {table}，写入 {count} 条（全量替换）')
+        return count
+
+    def save_detail(self, data: list[dict]) -> int:
+        """视频号模式：表不存在则创建，追加写入。返回写入行数。"""
+        self._ensure_table(self._TABLE_DETAIL)
+
+        if not data:
+            return 0
+
+        rows = [{k: item.get(k, '') for k in self._DATA_COLS} for item in data]
+        count = self._db.insert_batch(self._TABLE_DETAIL, rows)
+        logger.info(f'视频详情 → 表 {self._TABLE_DETAIL}，追加 {count} 条')
+        return count
+
+    def close(self):
+        self._db.close()
+
+
+class MySQLStorage:
+    """MySQL 存储适配器，包装 MysqlManager 提供 async 接口"""
+
+    def __init__(self):
+        self._manager = MysqlManager()
+
+    async def save(self, data: list[dict], keyword: str = '') -> int:
+        """保存数据到 MySQL，根据 keyword 分流"""
+        import asyncio
+        if keyword:
+            return await asyncio.to_thread(self._manager.save_keyword, keyword, data)
+        else:
+            return await asyncio.to_thread(self._manager.save_detail, data)
+
+    async def load(self) -> list[dict]:
+        return []
+
+    @property
+    def filepath(self) -> str:
+        return ""
+
+
 class StorageManager:
     """存储管理器"""
 
@@ -191,9 +301,9 @@ class StorageManager:
         初始化存储管理器
 
         Args:
-            storage_type: 存储类型 ('json' 或 'csv')
-            output_dir: 输出目录
-            filename: 文件名（可选）
+            storage_type: 存储类型 ('json', 'csv', 'mysql')
+            output_dir: 输出目录（mysql 类型忽略）
+            filename: 文件名（mysql 类型忽略）
             **kwargs: 传递给具体存储类的参数
         """
         self.output_dir = output_dir
@@ -202,15 +312,17 @@ class StorageManager:
             self._storage = JSONStorage(output_dir, filename)
         elif storage_type == 'csv':
             self._storage = CSVStorage(output_dir, filename, **kwargs)
+        elif storage_type == 'mysql':
+            self._storage = MySQLStorage()
         else:
             raise ValueError(f"不支持的存储类型: {storage_type}")
 
         self.storage_type = storage_type
         logger.info(f"存储管理器初始化: {storage_type} -> {output_dir}")
 
-    async def save(self, data: List[Dict]) -> bool:
+    async def save(self, data: List[Dict], **kwargs) -> bool:
         """保存数据"""
-        return await self._storage.save(data)
+        return await self._storage.save(data, **kwargs)
 
     async def load(self) -> List[Dict]:
         """加载数据"""
